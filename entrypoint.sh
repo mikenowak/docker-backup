@@ -24,6 +24,5 @@ fi
 echo "Current crontab:"
 crontab -l
 
-
 echo 'start'
 exec "$@"
