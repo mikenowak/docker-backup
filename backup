@@ -1,0 +1,25 @@
+#!/bin/bash
+set -e
+
+cleanup() {
+  echo "Cleanup backup older than $CLEANUP_OLDER_THAN days"
+  toberemove=$(find /backup/ -type f -not -name ".*" -mtime +$CLEANUP_OLDER_THAN | wc -l)
+  echo "Will try to remove $toberemove files"
+  find /backup/ -type f -not -name ".*" -mtime +$CLEANUP_OLDER_THAN -exec rm {} \;
+}
+
+if [ -z "${MYSQL_HOST}" ]; then echo "Error: MYSQL_HOST not set"; echo "Finished: FAILURE"; exit 1; fi
+if [ -z "${MYSQL_USER}" ]; then echo "Error: MYSQL_USER not set"; echo "Finished: FAILURE"; exit 1; fi
+if [ -z "${MYSQL_DATABASE}" ]; then echo "Error: MYSQL_DATABASE not set"; echo "Finished: FAILURE"; exit 1; fi
+if [ -z "${MYSQL_PASSWORD_FILE}" ]; then echo "Error: MYSQL_PASSWORD_FILE not set"; echo "Finished: FAILURE"; exit 1; fi
+if [ -z "${APP_DIRECTORY}" ]; then echo "Error: APP_DIRECTORY not set"; echo "Finished: FAILURE"; exit 1; fi
+
+if [ -n "$CLEANUP_OLDER_THAN" ]; then cleanup;  fi
+
+echo 'creating backup archive of /var/www/html'
+tar -zpc --directory="${APP_DIRECTORY}" --file="/backup/backup_`date '+%Y%m%d'`.tar.gz" "./"
+
+echo 'creating database dump'
+mysqldump --host="${MYSQL_HOST}" --add-drop-table --user="${MYSQL_USER}" --password="$(cat ${MYSQL_PASSWORD_FILE})" "${MYSQL_DATABASE}" | bzip2 -c > "/backup/backup_`date '+%Y%m%d'`.sql.bz2"
+
+echo 'Finished: SUCCESS'
