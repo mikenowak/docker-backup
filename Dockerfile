@@ -1,4 +1,4 @@
-FROM alpine:3.7
+FROM alpine:3.14
 RUN apk add --no-cache mysql-client bzip2 bash
 
 COPY entrypoint.sh /entrypoint.sh
