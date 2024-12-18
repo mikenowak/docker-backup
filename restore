@@ -1,56 +1,137 @@
 #!/bin/bash
 
-set -e
+set -eo pipefail
 
-if ! [[ "$1" ]]
-then
-    echo "Error: Backup name missing"
-    echo "Please specify a backup name, e.g. 'restore 20141104'"
-    echo "Finished: FAILURE"
+log_error() {
+    echo "ERROR: $1" >&2
     exit 1
-fi
+}
 
-if [ -z "${MYSQL_HOST}" ]; then echo "Error: MYSQL_HOST not set"; echo "Finished: FAILURE"; exit 1; fi
-if [ -z "${MYSQL_USER}" ]; then echo "Error: MYSQL_USER not set"; echo "Finished: FAILURE"; exit 1; fi
-if [ -z "${MYSQL_DATABASE}" ]; then echo "Error: MYSQL_DATABASE not set"; echo "Finished: FAILURE"; exit 1; fi
-if [ -z "${MYSQL_PASSWORD_FILE}" ]; then echo "Error: MYSQL_PASSWORD not set"; echo "Finished: FAILURE"; exit 1; fi
-if [ -z "${APP_DIRECTORY}" ]; then echo "Error: APP_DIRECTORY not set"; echo "Finished: FAILURE"; exit 1; fi
+log_info() {
+    echo "INFO: $1" >&2
+}
 
-if ! [[ $1 =~ ^[a-zA-Z0-9_-]+$ ]]
-then
-  echo "The given backup name does not match the expected pattern: only characters, digits, underscore and dash are allowed ([a-zA-Z0-9_-])."
-  echo 'Finished: FAILURE'
-  exit 1
-fi
+validate_environment() {
+    local required_vars=(
+        "MYSQL_HOST"
+        "MYSQL_USER"
+        "MYSQL_DATABASE"
+        "MYSQL_PASSWORD_FILE"
+        "APP_DIRECTORY"
+    )
 
-FILES_ARCHIVE="/backup/backup_$1.tar.gz"
-SQL_ARCHIVE="/backup/backup_$1.sql.bz2"
+    for var in "${required_vars[@]}"; do
+        if [ -z "${!var}" ]; then
+            log_error "$var not set"
+        fi
+    done
 
-if [[ ! -f "${FILES_ARCHIVE}" ]]
-then
-  echo "The file $FILES_ARCHIVE does not exist. Aborting."
-  echo "Finished: FAILURE."
-  exit 1
-fi
+    # Validate password file exists and is readable
+    if [ ! -r "$MYSQL_PASSWORD_FILE" ]; then
+        log_error "MySQL password file is not readable"
+    fi
 
-if [[ ! -f "${SQL_ARCHIVE}" ]]
-then
-  echo "The file $SQL_ARCHIVE does not exist. Aborting."
-  echo "Finished: FAILURE."
-  exit 1
-fi
+    # Validate app directory exists and is writable
+    if [ ! -w "$APP_DIRECTORY" ]; then
+        log_error "Application directory is not writable"
+    fi
+}
 
+validate_backup_name() {
+    local backup_name="$1"
+    
+    if [ -z "$backup_name" ]; then
+        log_error "Backup name missing. Please specify a backup name, e.g. 'restore 20240318_120000'"
+    fi
 
-# cleanup html folder
-echo "deleting files from ${APP_DIRECTORY}"
-rm -R ${APP_DIRECTORY}*
+    if ! [[ $backup_name =~ ^[a-zA-Z0-9_-]+$ ]]; then
+        log_error "Invalid backup name format. Only characters, digits, underscore and dash are allowed ([a-zA-Z0-9_-])"
+    fi
+}
 
-# restore files
-echo "restoring files from ${FILES_ARCHIVE} to ${APP_DIRECTORY}"
-tar -xzpf "${FILES_ARCHIVE}" --directory="${APP_DIRECTORY}"
+validate_backup_files() {
+    local backup_name="$1"
+    local files_archive="/backup/app_${backup_name}.tar.gz"
+    local sql_archive="/backup/db_${backup_name}.sql.bz2"
 
-# restore database
-echo "restoring data from mysql dump file $SQL_ARCHIVE"
-bunzip2 < "${SQL_ARCHIVE}" | mysql --user="${MYSQL_USER}" --password="$(cat ${MYSQL_PASSWORD_FILE})" --host="${MYSQL_HOST}" "${MYSQL_DATABASE}"
+    if [ ! -f "$files_archive" ]; then
+        log_error "File archive not found: $files_archive"
+    fi
 
-echo 'Finished: SUCCESS'
+    if [ ! -f "$sql_archive" ]; then
+        log_error "Database archive not found: $sql_archive"
+    fi
+
+    echo "$files_archive:$sql_archive"
+}
+
+restore_files() {
+    local files_archive="$1"
+    local temp_dir
+    
+    log_info "Cleaning up ${APP_DIRECTORY}"
+    # Use find for safer cleanup
+    find "${APP_DIRECTORY}" -mindepth 1 -delete
+
+    log_info "Restoring files from ${files_archive} to ${APP_DIRECTORY}"
+    
+    # Create temporary directory for validation
+    temp_dir=$(mktemp -d)
+    trap 'rm -rf "$temp_dir"' EXIT
+
+    # First extract to temp directory to validate archive
+    if ! tar -xzf "${files_archive}" -C "$temp_dir"; then
+        log_error "Failed to validate archive"
+    fi
+
+    # If validation successful, extract to actual directory
+    if ! tar -xzpf "${files_archive}" --directory="${APP_DIRECTORY}"; then
+        log_error "Failed to restore files"
+    fi
+}
+
+restore_database() {
+    local sql_archive="$1"
+    local mysql_config="/tmp/my.cnf"
+
+    log_info "Restoring database from ${sql_archive}"
+
+    # Create temporary MySQL config
+    cat > "$mysql_config" <<EOF
+[client]
+host=${MYSQL_HOST}
+user=${MYSQL_USER}
+password=$(cat "${MYSQL_PASSWORD_FILE}")
+EOF
+    chmod 600 "$mysql_config"
+
+    # Restore database
+    if ! bunzip2 < "${sql_archive}" | mysql --defaults-file="$mysql_config" "${MYSQL_DATABASE}"; then
+        rm -f "$mysql_config"
+        log_error "Failed to restore database"
+    fi
+
+    # Cleanup
+    rm -f "$mysql_config"
+}
+
+main() {
+    local backup_name="$1"
+    local archives
+
+    # Validate environment and inputs
+    validate_environment
+    validate_backup_name "$backup_name"
+    archives=$(validate_backup_files "$backup_name")
+    
+    # Split archives string into array
+    IFS=':' read -r files_archive sql_archive <<< "$archives"
+
+    # Perform restore operations
+    restore_files "$files_archive"
+    restore_database "$sql_archive"
+
+    log_info "Restore completed successfully"
+}
+
+main "$@"
