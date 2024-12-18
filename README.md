@@ -12,8 +12,10 @@ docker pull mikenowak/backup
 
 ## Features
 
-- Scheduled backups of application directories
-- MySQL/MariaDB database dumps
+- Flexible backup modes:
+  - Application files only
+  - MySQL/MariaDB database only
+  - Both files and database
 - Configurable backup schedule
 - Automatic cleanup of old backups
 - Secure credential handling
@@ -21,39 +23,84 @@ docker pull mikenowak/backup
 
 ## Usage
 
-### Docker Compose Example
+The container can operate in three modes depending on which environment variables you provide:
+
+### 1. Application Files Only
+
+For backing up just application files:
 
 ```yaml
 version: '3.8'
-
 services:
   backup:
     image: mikenowak/backup
-    # alternatively, build from source:
-    # build: .
     environment:
       - BACKUP_TIME=0 3 * * *  # Run at 3 AM daily
+      - APP_DIRECTORY=/app
+      - CLEANUP_OLDER_THAN=30  # Optional
+    volumes:
+      - ./app:/app:ro
+      - ./backups:/backup
+```
+
+### 2. MySQL/MariaDB Database Only
+
+For backing up just a database:
+
+```yaml
+version: '3.8'
+services:
+  backup:
+    image: mikenowak/backup
+    environment:
+      - BACKUP_TIME=0 3 * * *
       - MYSQL_HOST=db
       - MYSQL_USER=dbuser
       - MYSQL_DATABASE=myapp
       - MYSQL_PASSWORD_FILE=/run/secrets/db_password
-      - APP_DIRECTORY=/app
-      - CLEANUP_OLDER_THAN=30  # Optional: remove backups older than 30 days
+      - CLEANUP_OLDER_THAN=30  # Optional
     volumes:
-      - ./app:/app:ro  # Application files (read-only)
-      - ./backups:/backup  # Backup storage
-      - ./db_password:/run/secrets/db_password:ro  # Database password file
+      - ./backups:/backup
+      - ./db_password:/run/secrets/db_password:ro
 ```
 
-### Environment Variables
+### 3. Both Files and Database
 
+For backing up both:
+
+```yaml
+version: '3.8'
+services:
+  backup:
+    image: mikenowak/backup
+    environment:
+      - BACKUP_TIME=0 3 * * *
+      - APP_DIRECTORY=/app
+      - MYSQL_HOST=db
+      - MYSQL_USER=dbuser
+      - MYSQL_DATABASE=myapp
+      - MYSQL_PASSWORD_FILE=/run/secrets/db_password
+      - CLEANUP_OLDER_THAN=30  # Optional
+    volumes:
+      - ./app:/app:ro
+      - ./backups:/backup
+      - ./db_password:/run/secrets/db_password:ro
+```
+
+## Environment Variables
+
+Required (at least one set):
+- Application backup:
+  - `APP_DIRECTORY`: Directory to backup
+- Database backup:
+  - `MYSQL_HOST`: Database host
+  - `MYSQL_USER`: Database user
+  - `MYSQL_DATABASE`: Database name
+  - `MYSQL_PASSWORD_FILE`: Path to file containing database password
+
+Optional:
 - `BACKUP_TIME`: Cron schedule for backups (default: "0 3 * * *")
-- `MYSQL_HOST`: Database host
-- `MYSQL_USER`: Database user
-- `MYSQL_DATABASE`: Database name
-- `MYSQL_PASSWORD_FILE`: Path to file containing database password
-- `APP_DIRECTORY`: Directory to backup
-- `CLEANUP_OLDER_THAN`: Days to keep backups (optional)
+- `CLEANUP_OLDER_THAN`: Days to keep backups
 
 ### Backup Format
 
