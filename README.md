@@ -2,6 +2,14 @@
 
 A Docker container for automated backups of application files and MySQL/MariaDB databases. This solution provides both backup and restore functionality with configurable scheduling.
 
+## Installation
+
+You can pull the image directly from Docker Hub:
+
+```bash
+docker pull mikenowak/backup
+```
+
 ## Features
 
 - Scheduled backups of application directories
@@ -20,7 +28,9 @@ version: '3.8'
 
 services:
   backup:
-    build: .
+    image: mikenowak/backup
+    # alternatively, build from source:
+    # build: .
     environment:
       - BACKUP_TIME=0 3 * * *  # Run at 3 AM daily
       - MYSQL_HOST=db
