@@ -12,7 +12,7 @@ log_info() {
 }
 
 validate_backup_time() {
-    if ! [[ "$BACKUP_TIME" =~ ^[0-9*,/-]+ [0-9*,/-]+ [0-9*,/-]+ [0-9*,/-]+ [0-9*,/-]+$ ]]; then
+    if ! [[ "$BACKUP_TIME" =~ ^[0-9*]+\ [0-9*]+\ [0-9*]+\ [0-9*]+\ [0-9*]+$ ]]; then
         log_error "Invalid BACKUP_TIME format: $BACKUP_TIME"
         log_error "Expected format: '0 3 * * *' (minute hour day month weekday)"
         return 1
