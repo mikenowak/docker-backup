@@ -1,33 +1,101 @@
 #!/bin/bash
 
-set -e
+set -eo pipefail  # Exit on error and pipe failure
 
+TIMESTAMP=$(date '+%Y%m%d_%H%M%S')
+BACKUP_DIR="/backup"
 FINISHED=false
+SUCCESS=true
 
-cleanup() {
-  echo "Cleanup backup older than $CLEANUP_OLDER_THAN days"
-  toberemove=$(find /backup/ -type f -not -name ".*" -mtime +$CLEANUP_OLDER_THAN | wc -l)
-  echo "Will try to remove $toberemove files"
-  find /backup/ -type f -not -name ".*" -mtime +$CLEANUP_OLDER_THAN -exec rm {} \;
+log_error() {
+    echo "ERROR: $1" >&2
 }
 
-if [ -n "$CLEANUP_OLDER_THAN" ]; then cleanup;  fi
+log_info() {
+    echo "INFO: $1" >&2
+}
 
-if [ -n "${APP_DIRECTORY}" ]; then
-  echo 'creating backup archive of ${APP_DIRECTORY}'
-  tar -zpc --directory="${APP_DIRECTORY}" --file="/backup/backup_`date '+%Y%m%d'`.tar.gz" "./"
-  FINISHED=true
-fi
+cleanup() {
+    if [ -n "$CLEANUP_OLDER_THAN" ]; then
+        log_info "Cleanup backup older than $CLEANUP_OLDER_THAN days"
+        toberemove=$(find "$BACKUP_DIR/" -type f -not -name ".*" -mtime +"$CLEANUP_OLDER_THAN" | wc -l)
+        log_info "Will try to remove $toberemove files"
+        find "$BACKUP_DIR/" -type f -not -name ".*" -mtime +"$CLEANUP_OLDER_THAN" -exec rm {} \;
+    fi
+}
 
-if [ -n "${MYSQL_HOST}" -a -n "${MYSQL_USER}" -a -n "${MYSQL_DATABASE}" -a -n "${MYSQL_PASSWORD_FILE}" ]; then
-  echo 'creating database dump'
-  mysqldump --host="${MYSQL_HOST}" --add-drop-table --user="${MYSQL_USER}" --password="$(cat ${MYSQL_PASSWORD_FILE})" "${MYSQL_DATABASE}" | bzip2 -c > "/backup/backup_`date '+%Y%m%d'`.sql.bz2"
-  FINISHED=true
-fi
+backup_app() {
+    if [ -n "${APP_DIRECTORY}" ]; then
+        log_info "Creating backup archive of ${APP_DIRECTORY}"
+        if ! tar -zpc --directory="${APP_DIRECTORY}" --file="${BACKUP_DIR}/app_${TIMESTAMP}.tar.gz" "./"; then
+            log_error "Failed to create app backup"
+            SUCCESS=false
+            return 1
+        fi
+        FINISHED=true
+        log_info "App backup completed successfully"
+    fi
+}
 
-if [ "$FINISHED" == "false" ]; then
-  echo "ERROR: the container isnt configured correctly, neither APP_DIRECTORY or MYSQL were backed up."
-  exit 1
-fi
+backup_database() {
+    if [ -n "${MYSQL_HOST}" ] && [ -n "${MYSQL_USER}" ] && [ -n "${MYSQL_DATABASE}" ] && [ -n "${MYSQL_PASSWORD_FILE}" ]; then
+        log_info "Creating database dump"
+        # Create my.cnf file for secure password handling
+        MYSQL_PWD=$(cat "${MYSQL_PASSWORD_FILE}")
+        MYCNF="/tmp/my.cnf"
+        cat > "$MYCNF" <<EOF
+[client]
+host=${MYSQL_HOST}
+user=${MYSQL_USER}
+password=${MYSQL_PWD}
+EOF
+        chmod 600 "$MYCNF"
 
-echo 'Finished: SUCCESS'
+        if ! mysqldump --defaults-file="$MYCNF" \
+            --add-drop-table \
+            --single-transaction \
+            --set-gtid-purged=OFF \
+            --default-character-set=utf8mb4 \
+            "${MYSQL_DATABASE}" | bzip2 -c > "${BACKUP_DIR}/db_${TIMESTAMP}.sql.bz2"; then
+            log_error "Failed to create database backup"
+            SUCCESS=false
+            return 1
+        fi
+        
+        # Cleanup sensitive information
+        rm -f "$MYCNF"
+        FINISHED=true
+        log_info "Database backup completed successfully"
+    fi
+}
+
+main() {
+    # Ensure backup directory exists and is writable
+    if [ ! -w "$BACKUP_DIR" ]; then
+        log_error "Backup directory is not writable"
+        exit 1
+    fi
+
+    # Run cleanup first
+    cleanup
+
+    # Perform backups
+    backup_app
+    backup_database
+
+    # Check if any backup was performed
+    if [ "$FINISHED" = "false" ]; then
+        log_error "The container isn't configured correctly, neither APP_DIRECTORY or MYSQL were backed up."
+        exit 1
+    fi
+
+    # Check overall success
+    if [ "$SUCCESS" = "false" ]; then
+        log_error "Backup completed with errors"
+        exit 1
+    fi
+
+    log_info "Backup completed successfully"
+}
+
+main "$@"
