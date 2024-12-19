@@ -54,7 +54,6 @@ EOF
         if ! mysqldump --defaults-file="$MYCNF" \
             --add-drop-table \
             --single-transaction \
-            --set-gtid-purged=OFF \
             --default-character-set=utf8mb4 \
             "${MYSQL_DATABASE}" | bzip2 -c > "${BACKUP_DIR}/db_${TIMESTAMP}.sql.bz2"; then
             log_error "Failed to create database backup"
